@@ -1,0 +1,194 @@
+-- Most Effective Station Award -- 
+  
+
+--------------------------------------------------------------------------------------------------------------------  
+-- Question A -- 
+-- When does your region reach each 3500th rental on 2018?
+-- Column needed : region name, station id, trip id, start date, row number
+
+SELECT
+    reg.name as Name,
+    EXTRACT(DATE FROM (start_date)) AS Rental_No3500
+FROM (
+    SELECT
+         DISTINCT (trip_id),
+         region_id AS reg_id,
+         start_date,
+         ROW_NUMBER() OVER (PARTITION BY region_id ORDER BY start_date ASC) AS No_Rental
+    FROM
+        `bigquery-public-data.san_francisco_bikeshare.bikeshare_trips`
+    LEFT JOIN
+        `bigquery-public-data.san_francisco_bikeshare.bikeshare_station_info`
+    ON
+        start_station_id = station_id
+    WHERE
+        EXTRACT(YEAR FROM start_date) = 2018 
+)
+JOIN
+    `bigquery-public-data.san_francisco_bikeshare.bikeshare_regions` AS reg
+ON
+    reg_id = reg.region_id
+WHERE
+    no_rental = 3500
+AND
+    Name = "Oakland" ;
+
+
+-----------------------------------------------------------------------------------------------------------------------  
+-- Question B --
+-- What would be the longest trip duration (in second)? Using 90 Percentile to avoid outlier
+-- Column needed : region name, region id, station id, start date, duration sec, percentile
+
+SELECT
+    reg.name as Name, MAX(duration_sec) as Longest_Trip
+FROM (
+    SELECT
+        region_id as reg_id,
+        duration_sec,
+        PERCENTILE_CONT(duration_sec, 0.9) OVER(PARTITION BY region_id) as Percentile
+    FROM
+        `bigquery-public-data.san_francisco_bikeshare.bikeshare_trips`
+    LEFT JOIN
+        `bigquery-public-data.san_francisco_bikeshare.bikeshare_station_info`
+    ON
+        start_station_id = station_id
+    WHERE
+        EXTRACT(YEAR FROM start_date) = 2018
+)
+JOIN
+    `bigquery-public-data.san_francisco_bikeshare.bikeshare_regions` AS reg
+ON
+    reg_id = reg.region_id
+WHERE
+    duration_sec <= Percentile
+AND
+    Name = "Oakland"
+GROUP BY Name ;
+
+
+------------------------------------------------------------------------------------------------------------------------  
+-- Question C --
+-- Calculate in between rental time by duration between trips. What is the average?
+-- Column needed : region name, region id, station id, start date, average in between
+
+SELECT
+    reg.name, AVG(DiffBetween) as Average_Between
+FROM (
+    SELECT
+        region_id as reg_id,
+        start_date,
+        DATE_DIFF(start_date, LAG(start_date) OVER(PARTITION BY region_id ORDER BY start_date), second) as DiffBetween
+    FROM
+        `bigquery-public-data.san_francisco_bikeshare.bikeshare_trips`
+    LEFT JOIN
+        `bigquery-public-data.san_francisco_bikeshare.bikeshare_station_info`
+    ON
+        start_station_id = station_id
+    WHERE
+        EXTRACT(YEAR FROM start_date) = 2018
+)
+JOIN
+    `bigquery-public-data.san_francisco_bikeshare.bikeshare_regions` AS reg
+ON
+    reg_id = reg.region_id
+WHERE
+    Name = "Oakland"
+GROUP BY Name ;
+
+
+--------------------------------------------------------------------------------------------------------------------------  
+-- Question D --
+-- Ranking Your Region
+-- Criteria: most trip, longest trip duration, least in between rental time
+
+WITH x AS (
+    SELECT 
+        reg.name as Name, 
+        most_trip 
+    FROM (
+        SELECT 
+            region_id as reg_id, 
+            COUNT(*) Most_Trip
+        FROM 
+            `bigquery-public-data.san_francisco_bikeshare.bikeshare_trips`
+        JOIN 
+            `bigquery-public-data.san_francisco_bikeshare.bikeshare_station_info`
+        ON 
+            start_station_id = station_id
+        WHERE
+            EXTRACT(YEAR FROM start_date) = 2018
+        GROUP BY 1
+    )
+    JOIN 
+        `bigquery-public-data.san_francisco_bikeshare.bikeshare_regions` reg
+    ON 
+        reg_id = reg.region_id
+),
+y AS (
+    SELECT 
+        reg.name, 
+        ROUND(MAX(duration_sec), 1) as Longest_Trip 
+    FROM (
+        SELECT 
+            region_id as reg_id, 
+            duration_sec, 
+            PERCENTILE_CONT(duration_sec,0.9) OVER(PARTITION BY region_id) as Percentile
+        FROM 
+            `bigquery-public-data.san_francisco_bikeshare.bikeshare_trips`
+        JOIN 
+            `bigquery-public-data.san_francisco_bikeshare.bikeshare_station_info`
+        ON 
+            start_station_id = station_id
+        WHERE
+            EXTRACT(YEAR FROM start_date) = 2018 
+    )
+    JOIN 
+        `bigquery-public-data.san_francisco_bikeshare.bikeshare_regions` reg
+    ON 
+        reg_id = reg.region_id
+    WHERE 
+        duration_sec <= Percentile
+    GROUP BY 1
+), 
+z AS (
+    SELECT 
+        reg.name, 
+        ROUND(AVG(DiffBetween), 2) as Average_Between 
+    FROM (
+        SELECT 
+            region_id as reg_id, 
+            start_date, 
+            DATE_DIFF(start_date, lag(start_date) over (partition by region_id order by start_date), second) as DiffBetween
+        FROM 
+            `bigquery-public-data.san_francisco_bikeshare.bikeshare_trips`
+        JOIN 
+            `bigquery-public-data.san_francisco_bikeshare.bikeshare_station_info`
+        ON 
+            start_station_id = station_id
+        WHERE
+            EXTRACT(YEAR FROM start_date) = 2018
+    )
+    JOIN 
+        `bigquery-public-data.san_francisco_bikeshare.bikeshare_regions` reg
+    ON 
+        reg_id = reg.region_id
+    GROUP BY 1
+)
+
+SELECT 
+    x.Name, 
+    x.Most_Trip, 
+    y.Longest_Trip, 
+    z.Average_Between, 
+    RANK() OVER(ORDER BY x.Most_Trip DESC, y.Longest_Trip DESC, z.Average_Between) rank
+FROM 
+    x
+JOIN 
+    y
+ON 
+    x.Name = y.name
+JOIN 
+    z
+ON 
+    y.name = z.name
+ORDER BY rank ;
